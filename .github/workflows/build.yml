@@ -1,6 +1,6 @@
 name: CI
 
-on: [development]
+on: [Phin_development]
 
 jobs:
 
