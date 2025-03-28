@@ -1,84 +1,66 @@
-name: Build
+name: CI
 
-on:
-  pull_request:
-    branches: [ development ]
-  push:
-    branches: [ development ]
+on: [development]
 
 jobs:
-  run-checks-tests:
-    env:
-      OED_DB_USER: test
-      OED_DB_PASSWORD: travisTest
-      OED_DB_DATABASE: travis_ci_dummy
-      OED_DB_TEST_DATABASE: travis_ci_test
-      OED_DB_HOST: postgres
-      OED_DB_PORT: 5432
-      OED_TOKEN_SECRET: travis
-      OED_SERVER_PORT: 3000
-      OED_TEST_SITE_READING_RATE: 00:15:00
-      POSTGRES_PASSWORD: travisTest
 
-    runs-on: ubuntu-latest
-    # Make sure the node version here matches containers/web/Dockerfile for the standard OED build.
-    container: node:18.17.1
-
+    build:
+    runs-on: ubuntu-18.04
     services:
-      postgres:
-        image: postgres
+    postgres:
+        image: postgres:10
         env:
-          POSTGRES_PASSWORD: travisTest
-          POSTGRES_DB: travis_ci_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+        POSTGRES_USER: \${{ secrets.OED_DB_TEST_POSTGRES_USER}}
+        POSTGRES_PASSWORD: \${{ secrets.OED_DB_TEST_POSTGRES_PASSWORD}}
+        POSTGRES_DB: \${{ secrets.OED_DB_TEST_POSTGRES_DB}}
         ports:
-          - 5432:5432
+        - 5432:5432
+        options: >-
+        --health-cmd pg_isready
+        --health-interval 10s
+        --health-timeout 5s
+        --health-retries 5
+env:
+    OED_DB_USER: \${{ secrets.OED_DB_TEST_OED_DB_USER}}
+    OED_DB_PASSWORD: \${{ secrets.OED_DB_TEST_OED_DB_PASSWORD}}
+    OED_DB_DATABASE: \${{ secrets.OED_DB_TEST_OED_DB_DATABASE}}
+    OED_DB_TEST_DATABASE: \${{ secrets.OED_DB_TEST_OED_DB_TEST_DATABASE}}
+    OED_DB_HOST: \${{ secrets.OED_DB_TEST_OED_DB_TEST_OED_DB_HOST}}
+    OED_DB_PORT: \${{ secrets.OED_DB_TEST_OED_DB_TEST_OED_DB_OED_DB_PORT}}
+    OED_TOKEN_SECRET: \${{ secrets.OED_DB_TEST_OED_TOKEN_SECRET}}
+    OED_SERVER_PORT: \${{ secrets.OED_DB_TEST_OED_OED_SERVER_PORT}}
+    OED_TEST_SITE_READING_RATE: 00:15:00
+    DOCKER_COMPOSE_VERSION: 1.27.4
+    POSTGRES_PASSWORD: \${{ secrets.OED_DB_TEST_POSTGRES_PASSWORD}}
 
-    steps:
-      - name: Check out repository code
-        uses: actions/checkout@v3
-
-      # It is unclear why this does not work but the container: above for node works fine.
-      # This causes an exception when Postgres starts. One guess is that Postgres is starting
-      # before node is specified.
-      # - name: Use Node.js
-      #   uses: actions/setup-node@v3
-      #   with:
-      #     # Make sure the node version here matches containers/web/Dockerfile for the standard OED build.
-      #     node-version: '16.13.2'
-
-      # TODO This seems like a weird hack and there may be a better way to avoid the error that
-      # cannot write onto these directories.
-      - name: make testing directory writeable
-        run: |
-          chmod 777 src/server/tmp
-          chmod 777 src/server/tmp/uploads
-
-      # This is a hack/fix from https://github.com/actions/runner/issues/2033 that (hopefully) fixes
-      # fatal: detected dubious ownership in repository at '/__w/OED/OED'
-      # Other refs: https://github.com/crytic/slither-action/pull/50, https://github.com/actions/checkout/issues/1169,
-      # https://github.com/actions/checkout/issues/1048
-      # TODO Remove once final fix is in for GitHub workflows.
-      - name: make git permissions ok
-        run: chown -R $(id -u):$(id -g) $PWD
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Connect to PostgreSQL
-        run: node client.js
-        env:
-          POSTGRES_HOST: postgres
-          POSTGRES_PORT: 5432
-
-      - name: node tests
-        run: |
-          npm run check:header
-          npm run check:typescript
-          npm run check:types
-          npm run check:lint
-          npm run test
+steps:
+- uses: actions/checkout@v2
+- name: Set up Docker Compose
+    run: |
+    sudo rm /usr/local/bin/docker-compose
+    curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-\$(uname -s)-\$(uname -m)" > docker-compose
+    chmod +x docker-compose
+    sudo mv docker-compose /usr/local/bin
+- name: Install Node.js
+    uses: actions/setup-node@v2
+    with:
+    node-version: '14'
+- name: Set up database
+    run: |
+    psql -c 'CREATE DATABASE travis_ci_test;' -U postgres
+    psql -c "CREATE USER test WITH PASSWORD 'test';" -U postgres
+    psql -c 'CREATE EXTENSION IF NOT EXISTS btree_gist;' -U postgres -d travis_ci_test
+- name: Run docker-compose for setup
+    run: docker-compose run --rm web src/scripts/installOED.sh --nostart
+- name: Check source headers
+    run: npm run check:header
+- name: Check TypeScript annotations
+    run: npm run check:typescript
+- name: Check internal type consistency
+    run: npm run check:types
+- name: Lint check
+    run: npm run check:lint
+- name: Run tests without Docker
+    run: npm test
+- name: Run tests in Docker
+    run: docker-compose run --service-ports --rm web npm test 
